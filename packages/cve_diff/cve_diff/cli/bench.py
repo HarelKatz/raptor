@@ -427,11 +427,21 @@ def _render_bench_markdown(summary: _BenchSummary) -> str:
     ]
 
     # Failure cluster (excluding PASS).
-    fail_lines = [
-        f"| {r.cve_id} | {r.error_class or 'Other'} | {(r.error or '')[:200].replace('|', '\\|').replace(chr(10), ' ')} |"
-        for r in summary.results
-        if not r.ok
-    ]
+    # The cell text is escaped OUTSIDE the f-string: an f-string expression
+    # part may not contain a backslash before Python 3.12 (PEP 701), and
+    # RAPTOR supports 3.10+ (core/startup/init.py). The pre-existing
+    # ``chr(10)`` here was the same workaround applied to the newline only,
+    # which left the ``\\|`` pipe-escape as a 3.12-only construct that made
+    # this module — and therefore the whole ``cve-diff`` CLI — unimportable
+    # on 3.10/3.11.
+    fail_lines = []
+    for r in summary.results:
+        if r.ok:
+            continue
+        cell = (r.error or "")[:200].replace("|", "\\|").replace("\n", " ")
+        fail_lines.append(
+            f"| {r.cve_id} | {r.error_class or 'Other'} | {cell} |"
+        )
 
     # Integrity signals — pointer consensus + extraction agreement
     # tallies. Empty if no PASSes (nothing to integrity-check).
