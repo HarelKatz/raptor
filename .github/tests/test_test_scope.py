@@ -280,19 +280,36 @@ class TestDependencyManifestTriggersFastTier:
     changes on a TRANSITIVE bump — pyproject.toml only moves when a direct
     pin does — so omitting it would let dependency updates land untested
     while CI reported green.
+
+    Uses a synthetic repo rather than the real one: compute_tier_dispatch
+    falls back to _discover_fast_tier_files(), which walks every .py in the
+    tree. Against RAPTOR itself that is ~13s per call on a CI runner, which
+    trips the default-tier slow-test guard (RAPTOR_MAX_TEST_SECONDS). A
+    four-file fixture exercises the same predicate in milliseconds and is
+    deterministic besides.
     """
 
-    def test_lockfile_only_change_runs_fast_tier(self):
-        result = compute_tier_dispatch(["uv.lock"], Path(__file__).resolve().parents[2])
+    @staticmethod
+    def _repo(tmp_path):
+        # file_in_fast_tier() requires a test file under core/ or packages/.
+        repo = tmp_path / "proj"
+        (repo / "core" / "tests").mkdir(parents=True)
+        (repo / "core" / "tests" / "test_thing.py").write_text("def test_x():\n    pass\n")
+        (repo / "core" / "mod.py").write_text("x = 1\n")
+        return repo
+
+    def test_lockfile_only_change_runs_fast_tier(self, tmp_path):
+        repo = self._repo(tmp_path)
+        result = compute_tier_dispatch(["uv.lock"], repo)
         assert result["python"]["run"] is True
         assert result["python"]["files"], "expected the fast tier to be populated"
 
-    def test_manifest_only_change_runs_fast_tier(self):
-        result = compute_tier_dispatch(["pyproject.toml"], Path(__file__).resolve().parents[2])
-        assert result["python"]["run"] is True
+    def test_manifest_only_change_runs_fast_tier(self, tmp_path):
+        repo = self._repo(tmp_path)
+        assert compute_tier_dispatch(["pyproject.toml"], repo)["python"]["run"] is True
 
-    def test_unrelated_non_python_change_does_not_run_fast_tier(self):
+    def test_unrelated_non_python_change_does_not_run_fast_tier(self, tmp_path):
         # Guards against the predicate being widened into "any non-.py file",
         # which would make the trigger meaningless.
-        result = compute_tier_dispatch(["README.md"], Path(__file__).resolve().parents[2])
-        assert result["python"]["run"] is False
+        repo = self._repo(tmp_path)
+        assert compute_tier_dispatch(["README.md"], repo)["python"]["run"] is False
