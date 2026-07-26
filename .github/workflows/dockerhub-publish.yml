@@ -18,6 +18,16 @@ on:
     branches: [ main ]
     paths:
       - '.devcontainer/Dockerfile'
+      # The Dockerfile COPYs and installs these, but they were not triggers,
+      # so a dependency-only change never rebuilt the published image. The
+      # pyproject/uv.lock entries are for the uv migration; the requirements
+      # entries stay until those files are actually deleted.
+      - 'requirements.txt'
+      - 'requirements-dev.txt'
+      - 'packages/web/requirements.txt'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.devcontainer/test_devcontainer.py'
       - '.github/workflows/dockerhub-publish.yml'
     tags:
       - 'v*.*.*'
@@ -60,7 +70,7 @@ jobs:
         run: |
           echo "${DOCKERHUB_TOKEN}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
 
-      - name: Build and push
+      - name: Build
         env:
           TAGS: ${{ steps.tags.outputs.tags }}
         run: |
@@ -70,6 +80,35 @@ jobs:
             build_args+=(-t "${tag}")
           done
           docker build -f .devcontainer/Dockerfile "${build_args[@]}" .
+
+      # Gate the push on the 878-line dependency verifier, which until now
+      # was run by no workflow at all — the image could ship with a missing
+      # or downgraded dependency and nothing would notice.
+      #
+      # The bind mount is load-bearing, not a convenience. The Dockerfile
+      # COPYs only the requirements files (to /tmp) and leaves
+      # WORKDIR /workspaces/raptor empty; the repo normally arrives via the
+      # devcontainer's workspace mount at runtime. Without the mount the
+      # script is not in the image to run, and the PYTHONPATH set at
+      # .devcontainer/Dockerfile:161 (/workspaces/raptor:.../packages) points
+      # at nothing, so every `import core.*` check fails. Mounting the
+      # checkout there reproduces the contract the script documents
+      # ("Run this inside the devcontainer").
+      - name: Verify image dependencies
+        env:
+          TAGS: ${{ steps.tags.outputs.tags }}
+        run: |
+          set -euo pipefail
+          first_tag="${TAGS%%,*}"
+          docker run --rm \
+            -v "$PWD:/workspaces/raptor" -w /workspaces/raptor \
+            "${first_tag}" python .devcontainer/test_devcontainer.py
+
+      - name: Push
+        env:
+          TAGS: ${{ steps.tags.outputs.tags }}
+        run: |
+          set -euo pipefail
           for tag in ${TAGS//,/ }; do
             docker push "${tag}"
           done

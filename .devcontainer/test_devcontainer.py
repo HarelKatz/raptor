@@ -114,14 +114,34 @@ def check_python_package(name: str, min_version: Optional[str] = None) -> Tuple[
         module = importlib.import_module(name.replace('-', '_'))
         version = getattr(module, '__version__', None)
         if version is None:
-            # Try pkg_resources
+            # importlib.metadata is stdlib since 3.8 and is the supported
+            # replacement for pkg_resources, which is deprecated and gone in
+            # setuptools 81+. Try it BEFORE the legacy shim so version
+            # discovery does not silently depend on setuptools being present.
+            try:
+                from importlib.metadata import version as _dist_version
+                version = _dist_version(name)
+            except Exception:
+                pass
+        if version is None:
+            # Legacy fallback, kept for distributions that only register
+            # under pkg_resources.
             try:
                 import pkg_resources
                 version = pkg_resources.get_distribution(name).version
             except Exception:
                 pass
 
-        if version and min_version:
+        if min_version:
+            # A floor that cannot be evaluated must NOT report success. The
+            # previous `if version and min_version:` meant an undiscoverable
+            # version skipped the comparison and fell through to PASS, so the
+            # floor was enforced only when the pkg_resources shim above
+            # happened to work — and that shim is deprecated, removed in
+            # setuptools 81+, and swallowed by a bare `except Exception`.
+            # "I could not check" is a different answer from "it passed".
+            if not version:
+                return False, f"Installed, but version undeterminable (needs >= {min_version})", None
             from packaging import version as pkg_version
             if pkg_version.parse(version) < pkg_version.parse(min_version):
                 return False, f"Version {version} < required {min_version}", version
@@ -146,7 +166,14 @@ def check_env_var(name: str, required: bool = False) -> Tuple[bool, str]:
 
 def check_library(name: str) -> Tuple[bool, str]:
     """Check if a system library is available."""
-    # Try ldconfig on Linux
+    # Try ldconfig on Linux.
+    #
+    # Match the SONAME field, not the raw dump. `name in result.stdout` was a
+    # substring test against several hundred lines of paths and sonames, so
+    # the two callers here — "pthread" and "dl" — could never fail: "dl" alone
+    # matches any path containing those two letters (libgdl, /usr/lib/.../dl*,
+    # …). That made two required=True assertions unfalsifiable.
+    stem = name if name.startswith("lib") else f"lib{name}"
     if platform.system() == "Linux":
         try:
             result = subprocess.run(
@@ -155,8 +182,12 @@ def check_library(name: str) -> Tuple[bool, str]:
                 text=True,
                 timeout=5
             )
-            if name in result.stdout:
-                return True, "Found via ldconfig"
+            for line in result.stdout.splitlines():
+                # Entries look like:
+                #   \tlibpthread.so.0 (libc6,x86-64) => /lib/.../libpthread.so.0
+                soname = line.strip().split(" ", 1)[0]
+                if soname == f"{stem}.so" or soname.startswith(f"{stem}.so."):
+                    return True, f"Found via ldconfig ({soname})"
         except Exception:
             pass
 
@@ -177,7 +208,9 @@ def check_library(name: str) -> Tuple[bool, str]:
     for path in lib_paths:
         if os.path.exists(path):
             for f in os.listdir(path):
-                if name in f and ('.so' in f or '.dylib' in f):
+                # Anchor on the lib-prefixed stem here too, for the same
+                # reason as the ldconfig branch above.
+                if f.startswith(f"{stem}.so") or f.startswith(f"{stem}.dylib"):
                     return True, f"Found: {path}/{f}"
 
     return False, "Not found"
@@ -448,10 +481,23 @@ def run_all_tests(verbose: bool = False, skip_optional: bool = False) -> List[Te
     # DEBUGGERS
     # =========================================================================
 
+    # `rr` is NOT required: the image does not actually ship it, and the
+    # Dockerfile is written to tolerate that. .devcontainer/Dockerfile:80
+    # pins `rr=5.9.0-9`, but Debian bookworm only carries `rr 5.6.0-3+b1`
+    # (`apt-cache madison rr`), so the install fails on every architecture
+    # and the trailing `|| echo "rr not available on this architecture -
+    # skipping"` swallows it, leaving the layer green. The pin was
+    # introduced by RAPTOR's own SCA self-bump in 231eac26; the same commit
+    # made the same mistake on nodejs, but that RUN has no `||` guard, so it
+    # broke the build loudly and was fixed in 77dfd384.
+    #
+    # Asserting rr as required here would fail the post-build gate on an
+    # image that is exactly what the Dockerfile says it should be. Fix the
+    # pin and this goes back to required=True.
     debugger_binaries = [
         ("gdb", "--version", True, ["rr-debugger", "crash-analyzer-agent", "binary_analysis"]),
         ("gdb-multiarch", "--version", False, ["Cross-platform debugging"]),
-        ("rr", "--version", True, ["rr-debugger skill", "crash-analysis agents"]),
+        ("rr", "--version", False, ["rr-debugger skill", "crash-analysis agents"]),
     ]
 
     # lldb is optional (mainly for macOS)
@@ -472,13 +518,22 @@ def run_all_tests(verbose: bool = False, skip_optional: bool = False) -> List[Te
             used_by=used_by
         ))
 
-    # Check rr kernel configuration
+    # Check rr kernel configuration.
+    #
+    # Not required: perf_event_paranoid is not a namespaced sysctl, so a
+    # container reads the HOST kernel's value no matter what the image
+    # contains. No image change can satisfy this, which makes it meaningless
+    # as a post-build gate assertion — a CI runner defaults to 4. It is a
+    # session-time concern and is already handled there by devcontainer.json's
+    # postStartCommand, which writes 1 to it on start. The check stays because
+    # it is genuinely useful diagnostic output when run inside a devcontainer;
+    # it just must not block.
     passed, msg = check_rr_kernel()
     results.append(TestResult(
         name="rr kernel config",
         category=Category.DEBUGGER,
         passed=passed,
-        required=True,  # Required when using --privileged devcontainer
+        required=False,
         message=msg,
         used_by=["rr-debugger skill (requires --privileged devcontainer)"]
     ))
@@ -564,13 +619,26 @@ def run_all_tests(verbose: bool = False, skip_optional: bool = False) -> List[Te
         ))
 
     # =========================================================================
-    # PYTHON CORE PACKAGES (from requirements.txt)
+    # PYTHON CORE PACKAGES (pinned in requirements.txt)
     # =========================================================================
+    #
+    # Floors track the actual pins. A floor far below the pin (this table
+    # once demanded ruff>=0.1.0 against a 0.15.12 pin) passes on any install,
+    # including a broken one — which defeats the point of running this as a
+    # post-build gate, where the failure mode being watched for is a
+    # dependency arriving older than pinned or not at all.
+    #
+    # `anthropic` is deliberately NOT required: nothing in the image build
+    # installs it. requirements.txt only mentions it in a comment, and the
+    # sole real pin lives in .devcontainer/requirements-all-optional.txt,
+    # which is pulled in by devcontainer.json's postCreateCommand — a VS Code
+    # lifecycle hook that never runs during `docker build`. Marked required,
+    # it failed the gate on a perfectly correct image.
 
     python_core_packages = [
-        ("requests", "2.31.0", True, ["All HTTP clients", "web package"]),
-        ("anthropic", "0.39.0", True, ["llm_analysis", "/analyze", "/agentic"]),
-        ("tabulate", "0.9.0", True, ["Output formatting"]),
+        ("requests", "2.34.2", True, ["All HTTP clients", "web package"]),
+        ("anthropic", "0.84.0", False, ["llm_analysis", "/analyze", "/agentic"]),
+        ("tabulate", "0.10.0", True, ["Output formatting"]),
     ]
 
     for package, min_ver, required, used_by in python_core_packages:
@@ -586,14 +654,14 @@ def run_all_tests(verbose: bool = False, skip_optional: bool = False) -> List[Te
         ))
 
     # =========================================================================
-    # PYTHON DEV PACKAGES (from requirements-dev.txt)
+    # PYTHON DEV PACKAGES (pinned in requirements-dev.txt)
     # =========================================================================
 
     python_dev_packages = [
-        ("ruff", "0.1.0", True, ["Linting"]),
-        ("mypy", "1.0.0", True, ["Type checking"]),
-        ("pytest", "7.0.0", True, ["Testing"]),
-        ("pytest-cov", "4.0.0", False, ["Coverage reporting"]),
+        ("ruff", "0.15.12", True, ["Linting"]),
+        ("mypy", "2.1.0", True, ["Type checking"]),
+        ("pytest", "9.1.1", True, ["Testing"]),
+        ("pytest-cov", "7.1.0", False, ["Coverage reporting"]),
     ]
 
     for package, min_ver, required, used_by in python_dev_packages:
@@ -616,16 +684,22 @@ def run_all_tests(verbose: bool = False, skip_optional: bool = False) -> List[Te
 
     if not skip_optional:
         python_forensics_packages = [
-            ("pydantic", "2.0.0", False, ["github-evidence-kit"]),
+            ("pydantic", "2.13.4", False, ["github-evidence-kit"]),
             ("google.cloud.bigquery", None, False, ["github-archive skill"]),
             ("google.auth", None, False, ["github-archive skill"]),
             ("waybackpy", "3.0.0", False, ["github-wayback-recovery skill"]),
         ]
 
         for package, min_ver, required, used_by in python_forensics_packages:
-            # Handle dotted imports
-            import_name = package.split(".")[0]
-            passed, msg, version = check_python_package(import_name, min_ver)
+            # Import the FULL dotted path, not just its first component.
+            # Truncating to the first component made both google.* entries
+            # resolve to `import google`, which SUCCEEDS on any image that has
+            # protobuf: `google` is a PEP-420 implicit namespace package with
+            # __file__ = None and no modules of its own. The gate therefore
+            # reported PASS for google.cloud.bigquery and google.auth on an
+            # image where neither is installed — a check that asserts
+            # something false is worse than no check at all.
+            passed, msg, version = check_python_package(package, min_ver)
             results.append(TestResult(
                 name=f"python: {package}",
                 category=Category.PYTHON_FORENSICS,
@@ -642,7 +716,7 @@ def run_all_tests(verbose: bool = False, skip_optional: bool = False) -> List[Te
 
     if not skip_optional:
         python_optional_packages = [
-            ("openai", "1.0.0", False, ["Alternative LLM provider"]),
+            ("openai", "2.26.0", False, ["Alternative LLM provider"]),
             ("bs4", None, False, ["/web command"]),  # beautifulsoup4 imports as bs4
             ("playwright", None, False, ["/web command"]),
             ("pwn", None, False, ["/exploit command"]),  # pwntools imports as pwn

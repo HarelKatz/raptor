@@ -32,6 +32,18 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git coccinelle \
     && rm -rf /var/lib/apt/lists/*
 
+# uv, for the reconcile fallback in _tier.yml and (from the uv migration
+# onward) the dependency install itself. Pinned by DIGEST rather than tag:
+# the rest of this repo SHA-pins actions but only tag-pins images, and a
+# tag is mutable — for a binary that is executed during CI in a
+# supply-chain security tool, the stricter pin is the right default.
+# The binaries are musl-static, so they are independent of the base's
+# glibc; the digest is multi-arch (linux/amd64 + linux/arm64), which
+# matters because this base is bookworm-pinned for z3's aarch64 wheel.
+# Bump the digest and the tag together — the tag is documentation.
+COPY --from=ghcr.io/astral-sh/uv:0.11.32@sha256:df4cae8f3a96d175e2e5f992e597550000edbe78fdc2594d5cd8de1a217f504c \
+     /uv /uvx /usr/local/bin/
+
 WORKDIR /opt/raptor-ci
 
 # Copy only the manifests first so the dependency layer cache survives

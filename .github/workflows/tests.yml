@@ -85,7 +85,19 @@ jobs:
       # pull the private GHCR deps image. Tiers pass this to _tier.yml to
       # choose the image (fast) vs runner (fallback) path.
       pkg_access: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+      # GHCR repository paths must be lowercase, and github.repository_owner
+      # carries the owner's actual case — so a mixed-case owner (any fork of
+      # this repo, e.g. HarelKatz/raptor) makes `docker pull` fail outright
+      # with "invalid reference format: repository name must be lowercase",
+      # taking down every container-path tier. ci-deps-image.yml already
+      # lowercases before pushing; _tier.yml consumes this to match.
+      # Computed in a step because GitHub expressions have no toLower().
+      owner: ${{ steps.owner.outputs.owner }}
     steps:
+      - id: owner
+        run: |
+          echo "owner=$(echo '${{ github.repository_owner }}' \
+            | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
       - id: dup
         env:
           GH_TOKEN: ${{ github.token }}
@@ -795,6 +807,7 @@ jobs:
       test_path: ${{ needs.changes.outputs.source_intel_files }}
       pytest_args: ""
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
+      image_owner: ${{ needs.pre_check.outputs.owner }}
 
   # Prompt-envelope audit: AST-based heuristic over the registered
   # prompt-construction files. The test only needs stdlib + pytest
@@ -873,6 +886,7 @@ jobs:
       test_path: ${{ needs.changes.outputs.codeql_files }}
       timeout_minutes: 25
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
+      image_owner: ${{ needs.pre_check.outputs.owner }}
 
   python-unit-tests-llm-analysis:
     needs: [pre_check, changes]
@@ -888,6 +902,7 @@ jobs:
       test_path: ${{ needs.changes.outputs.llm_analysis_files }}
       timeout_minutes: 25
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
+      image_owner: ${{ needs.pre_check.outputs.owner }}
 
   python-unit-tests-cve-diff:
     needs: [pre_check, changes]
@@ -902,6 +917,7 @@ jobs:
       tier: cve_diff
       test_path: ${{ needs.changes.outputs.cve_diff_files }}
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
+      image_owner: ${{ needs.pre_check.outputs.owner }}
 
   python-unit-tests-fuzzing:
     needs: [pre_check, changes]
@@ -916,6 +932,7 @@ jobs:
       tier: fuzzing
       test_path: ${{ needs.changes.outputs.fuzzing_files }}
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
+      image_owner: ${{ needs.pre_check.outputs.owner }}
 
   # CANARY for the prebuilt-image migration (phase 2 of the fan-out
   # fix). sage is the proving ground: zero subprocess usage in
@@ -944,6 +961,7 @@ jobs:
       tier: sage
       test_path: ${{ needs.changes.outputs.sage_files }}
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
+      image_owner: ${{ needs.pre_check.outputs.owner }}
 
   python-unit-tests-orchestration:
     needs: [pre_check, changes]
@@ -958,6 +976,7 @@ jobs:
       tier: orchestration
       test_path: ${{ needs.changes.outputs.orchestration_files }}
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
+      image_owner: ${{ needs.pre_check.outputs.owner }}
 
   # Single aggregate gate over the whole suite. `needs:` every job and
   # `if: always()` so it still runs when an upstream tier is path-filtered
