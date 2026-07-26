@@ -65,8 +65,12 @@ jobs:
           # and ${{ github.repository_owner }} can carry mixed case.
           owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/raptor-ci-deps"
-          # Content tag over the manifests that define the image.
-          reqhash="$(cat requirements.txt requirements-dev.txt | sha256sum | cut -c1-12)"
+          # Content tag over the manifests that define the image. Must name
+          # the same two files, in the same order, as the sha256sum baked
+          # into /etc/raptor-ci-deps.hash by ci-deps.Dockerfile — otherwise
+          # the :req-<hash> rollback anchor stops corresponding to the image
+          # contents the tiers verify against.
+          reqhash="$(cat pyproject.toml uv.lock | sha256sum | cut -c1-12)"
           docker build \
             -f .github/docker/ci-deps.Dockerfile \
             -t "${image}:main" \

@@ -637,7 +637,7 @@ def run_all_tests(verbose: bool = False, skip_optional: bool = False) -> List[Te
 
     python_core_packages = [
         ("requests", "2.34.2", True, ["All HTTP clients", "web package"]),
-        ("anthropic", "0.84.0", False, ["llm_analysis", "/analyze", "/agentic"]),
+        ("anthropic", "0.120.0", False, ["llm_analysis", "/analyze", "/agentic"]),
         ("tabulate", "0.10.0", True, ["Output formatting"]),
     ]
 
@@ -716,7 +716,7 @@ def run_all_tests(verbose: bool = False, skip_optional: bool = False) -> List[Te
 
     if not skip_optional:
         python_optional_packages = [
-            ("openai", "2.26.0", False, ["Alternative LLM provider"]),
+            ("openai", "2.48.0", False, ["Alternative LLM provider"]),
             ("bs4", None, False, ["/web command"]),  # beautifulsoup4 imports as bs4
             ("playwright", None, False, ["/web command"]),
             ("pwn", None, False, ["/exploit command"]),  # pwntools imports as pwn

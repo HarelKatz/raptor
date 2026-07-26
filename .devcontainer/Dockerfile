@@ -69,7 +69,18 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 # SEMGREP (static-analysis, scan, raptor-scan, agentic commands)
 # ============================================================================
 
-RUN pip install --no-cache-dir semgrep==1.161.0
+# 1.171.0, not 1.161.0: semgrep 1.161.0 requires click~=8.1.8 (>=8.1.8,<8.2)
+# while typer==0.25.1 (a root dependency) requires click>=8.2.1 — an EMPTY
+# intersection. That only stayed invisible because semgrep and the project
+# deps were two separate `pip install` layers, so two independent resolver
+# runs each succeeded and the second silently upgraded click to 8.4.2, leaving
+# the image failing its own `pip check`:
+#   semgrep 1.161.0 has requirement click~=8.1.8, but you have click 8.4.2
+# A single resolver pass over both is ResolutionImpossible, which is exactly
+# what uv does, so the migration would have hit it as a hard failure.
+# semgrep 1.171.0 widened the constraint to click~=8.4.2, which intersects
+# typer's floor at 8.4.2/8.4.3.
+RUN pip install --no-cache-dir semgrep==1.171.0
 
 # ============================================================================
 # RR DEBUGGER (rr-debugger skill, crash-analysis agents)
@@ -113,14 +124,26 @@ RUN mkdir -p /opt/codeql \
 # PYTHON DEPENDENCIES
 # ============================================================================
 
-COPY requirements.txt requirements-dev.txt /tmp/
-# Also copy package-specific requirements so they can be installed explicitly if desired
-COPY packages/web/requirements.txt /tmp/packages-web-requirements.txt
+# uv, digest-pinned exactly as in .github/docker/ci-deps.Dockerfile. Bump both
+# together. The binaries are musl-static, so independent of this base's glibc.
+# NOTE: pip is deliberately left installed. "uv only" governs how RAPTOR
+# manages its OWN dependencies; an interactive research image should still
+# offer operators pip for ad-hoc installs.
+COPY --from=ghcr.io/astral-sh/uv:0.11.32@sha256:df4cae8f3a96d175e2e5f992e597550000edbe78fdc2594d5cd8de1a217f504c \
+     /uv /uvx /usr/local/bin/
 
-RUN pip install --no-cache-dir -r /tmp/requirements-dev.txt
+COPY pyproject.toml uv.lock /tmp/
 
-# Install web package dependencies (includes playwright)
-RUN pip install --no-cache-dir -r /tmp/packages-web-requirements.txt
+# One export covers what three separate installs used to: requirements-dev.txt
+# (runtime + test/lint/type tooling), and packages/web/requirements.txt
+# (beautifulsoup4 + playwright) which is now the `web` extra. Installed with
+# --system so every operator invocation — bin/raptor, python -m ... — resolves
+# without activating anything, and so uv never resolves at container run time.
+# --frozen asserts uv.lock matches pyproject.toml rather than re-resolving.
+RUN uv export --frozen --no-emit-project --directory /tmp \
+        --extra web --extra smt --group dev -o /tmp/req-dev.txt \
+    && uv pip install --system --no-cache -r /tmp/req-dev.txt \
+    && rm -f /tmp/req-dev.txt /tmp/pyproject.toml /tmp/uv.lock
 
 # Install Playwright browser + system deps via Playwright's own dep installer.
 # Replaces a hand-rolled apt list that drifted out of sync with upstream Chromium deps.
