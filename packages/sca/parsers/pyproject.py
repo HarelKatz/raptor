@@ -1,4 +1,5 @@
-"""pyproject.toml parser — PEP 621, Poetry, PDM, and build-system requires.
+"""pyproject.toml parser — PEP 621, PEP 735, Poetry, PDM, uv, and
+build-system requires.
 
 Reads (in this order, since a single file may declare deps under several
 schemes — Poetry projects often add ``[build-system].requires``, and a
@@ -10,7 +11,22 @@ PEP 621 project may also list a few PDM dev groups):
 - ``[tool.poetry.dev-dependencies]``            → dev   (legacy Poetry)
 - ``[tool.poetry.group.<name>.dependencies]``   → dev   (modern Poetry)
 - ``[tool.pdm.dev-dependencies][<group>]``      → dev
+- ``[dependency-groups][<group>]``              → PEP 735; scope by group
+                                                  name (see _scope_for_group)
+- ``[tool.uv].dev-dependencies``                → dev   (legacy uv, pre-PEP 735)
 - ``[build-system].requires``                   → build (PEP 518/517)
+
+PEP 735 groups carry no scope of their own, so ``_scope_for_group`` maps
+the group NAME onto a scope rather than bucketing everything as ``dev``.
+``hygiene.check_cross_manifest_inconsistency`` partitions comparisons by
+``(ecosystem, name, role, scope)``, so a dep filed under the wrong scope
+silently drops out of cross-manifest comparison instead of erroring.
+
+``[tool.uv]``'s ``constraint-dependencies`` / ``override-dependencies``
+are deliberately NOT read: they steer uv's resolver (upper bounds, forced
+substitutions) rather than declare something the project depends on, so
+emitting them as Dependency rows would inflate the dep surface with
+entries no installer ever installs.
 
 The ``python`` entry under Poetry's deps is the project's own Python
 constraint, not a dep — we skip it.
@@ -148,6 +164,35 @@ def parse(path: Path) -> List[Dependency]:
                     if d is not None:
                         deps.append(d)
 
+    # --- uv (legacy, pre-PEP 735) ----------------------------------------
+    # ``[tool.uv].dev-dependencies`` is a flat PEP 508 list. Its successor
+    # is ``[dependency-groups].dev`` below; both can coexist in a repo
+    # mid-migration, and duplicate rows are harmless (the pipeline
+    # de-duplicates by (ecosystem, name, version) downstream).
+    uv_tool = tool.get("uv") if isinstance(tool, dict) else None
+    if isinstance(uv_tool, dict):
+        for spec in uv_tool.get("dev-dependencies", []) or []:
+            d = _from_pep508(spec, path, scope="dev")
+            if d is not None:
+                deps.append(d)
+
+    # --- PEP 735 dependency groups ---------------------------------------
+    # ``[dependency-groups]`` is a top-level table (NOT under [tool]), one
+    # key per group, each a list of PEP 508 strings and/or
+    # ``{include-group = "other"}`` dicts. The include-group dicts need no
+    # special-casing: ``_from_pep508`` returns None for non-strings, and
+    # the included group is parsed on its own key anyway.
+    groups = data.get("dependency-groups")
+    if isinstance(groups, dict):
+        for gname, items in groups.items():
+            if not isinstance(items, list):
+                continue
+            scope = _scope_for_group(gname)
+            for spec in items:
+                d = _from_pep508(spec, path, scope=scope)
+                if d is not None:
+                    deps.append(d)
+
     # --- build-system.requires ------------------------------------------
     build_system = data.get("build-system")
     if isinstance(build_system, dict):
@@ -162,6 +207,32 @@ def parse(path: Path) -> List[Dependency]:
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
+
+def _scope_for_group(name: Any) -> str:
+    """Map a PEP 735 group name onto a Dependency scope.
+
+    PEP 735 groups are just named lists — the spec assigns them no
+    semantics, so the name is the only signal available. Filing every
+    group under ``dev`` would be lossy in a way that fails silently:
+    ``hygiene.check_cross_manifest_inconsistency`` buckets by
+    ``(ecosystem, name, role, scope)``, so a runtime dep declared in a
+    ``main`` group but recorded as ``dev`` never gets compared against
+    the same dep in ``[project.dependencies]``, and a genuine version
+    disagreement goes unreported.
+
+    Unrecognised names fall through to ``dev`` — the safe default, since
+    the convention (``lint``, ``types``, ``docs``, ``bench``) is that a
+    group holds tooling, not runtime deps.
+    """
+    if not isinstance(name, str):
+        return "dev"
+    key = name.strip().lower()
+    if key in ("main", "runtime"):
+        return "main"
+    if key in ("test", "tests"):
+        return "test"
+    return "dev"
+
 
 def _extract_license(data: Dict[str, Any]) -> Optional[str]:
     """Read the project license from PEP 621 ``[project]`` or Poetry's
