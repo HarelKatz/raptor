@@ -85,6 +85,43 @@ title: RAPTOR
 version: "3.0.0"
 CFFEOF
 
+    # Create pyproject.toml — the FOURTH version source. uv requires
+    # [project].version even for a virtual project (package = false), so it
+    # cannot be omitted, which means a release that forgets to stamp it ships
+    # a manifest claiming the previous version. The decoy `version` line under
+    # a later table guards the anchoring: a naive regex would stamp that one.
+    cat > pyproject.toml <<'TOMLEOF'
+[project]
+name = "raptor"
+version = "3.0.0"
+requires-python = ">=3.10"
+
+[tool.something]
+version = "keep-me"
+TOMLEOF
+
+    # Create README.md with the banner line the stamper rewrites. Required:
+    # stamp_readme() reads it unguarded, and that is correct — a real release
+    # always has a README, and guarding it would weaken the script's
+    # "nothing was stamped -> fail" check.
+    cat > README.md <<'MDEOF'
+# RAPTOR
+
+```
+╔══════════════════════════════════════════════════════════════════════════════╗
+║             Based on Claude Code (v3.0.0)                                 ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+```
+MDEOF
+
+    # Copy the REAL stamper so this test exercises the shipped script rather
+    # than a reimplementation of it — the previous local copy of the regexes
+    # is exactly how pyproject.toml would have been missed.
+    mkdir -p "$REPO/.github/scripts"
+    cp "$SCRIPT_DIR/.github/scripts/stamp-version" \
+       "$REPO/.github/scripts/stamp-version"
+    chmod +x "$REPO/.github/scripts/stamp-version"
+
     # Create .gitattributes
     cp "$SCRIPT_DIR/.gitattributes" "$REPO/.gitattributes" 2>/dev/null || \
     cat > .gitattributes <<'ATTR'
@@ -229,31 +266,18 @@ generate_changelog() {
 
 stamp_version() {
     local TAG="$1"
-    python3 -c "
-import sys, re
-tag = sys.argv[1]
-ver = tag.lstrip('v')
-
-# The banner (core/startup/assets/raptor-offset) is deliberately NOT stamped —
-# it keeps a __VERSION__ placeholder and banner.py injects the live version at
-# render time. The test asserts below that the release leaves it untouched.
-
-# core/config/__init__.py VERSION
-text = open('core/config/__init__.py').read()
-text = re.sub(
-    r'^(\s+VERSION = \")[^\"]+(\")' ,
-    lambda m: m.group(1) + ver + m.group(2),
-    text, count=1, flags=re.MULTILINE)
-open('core/config/__init__.py', 'w').write(text)
-
-# CITATION.cff version (semver, no leading 'v')
-text = open('CITATION.cff').read()
-text = re.sub(
-    r'^(version: \")[^\"]+(\")',
-    lambda m: m.group(1) + ver + m.group(2),
-    text, count=1, flags=re.MULTILINE)
-open('CITATION.cff', 'w').write(text)
-" "$TAG"
+    # Invoke the SHIPPED stamper, not a local reimplementation of it. This
+    # used to re-derive the regexes here, which meant the test kept passing
+    # while the real script and the set of version sources drifted apart.
+    #
+    # The banner (core/startup/assets/raptor-offset) is deliberately NOT
+    # stamped — it keeps a __VERSION__ placeholder and banner.py injects the
+    # live version at render time. The test asserts below that the release
+    # leaves it untouched.
+    #
+    # README.md is absent from this fixture, so the script warns on that one
+    # source and stamps the rest; it only fails when NOTHING was stamped.
+    python3 .github/scripts/stamp-version "$TAG" >/dev/null
 }
 
 build_archive() {
@@ -361,12 +385,14 @@ BANNER_PATH=core/startup/assets/raptor-offset
 cp "$BANNER_PATH" "$BANNER_PATH.orig"
 cp core/config/__init__.py core/config/__init__.py.orig
 cp CITATION.cff CITATION.cff.orig
+cp pyproject.toml pyproject.toml.orig
 
 for tag in v3.1.0 v10.20.30; do
     # Restore originals
     cp "$BANNER_PATH.orig" "$BANNER_PATH"
     cp core/config/__init__.py.orig core/config/__init__.py
     cp CITATION.cff.orig CITATION.cff
+cp pyproject.toml.orig pyproject.toml
 
     stamp_version "$tag"
     ver="${tag#v}"
@@ -386,23 +412,35 @@ for tag in v3.1.0 v10.20.30; do
     # CITATION.cff: version stamped (semver, no leading 'v')
     CITATION=$(cat CITATION.cff)
     assert_contains     "CITATION version: \"$ver\""        "$CITATION" "version: \"$ver\""
+
+    # pyproject.toml: [project].version stamped, and the decoy `version` line
+    # under [tool.something] left alone — proves the stamper is anchored to the
+    # [project] table rather than matching the first version line it sees.
+    PYPROJECT=$(cat pyproject.toml)
+    assert_contains     "pyproject [project].version = \"$ver\"" "$PYPROJECT" "version = \"$ver\""
+    assert_contains     "pyproject decoy untouched"            "$PYPROJECT" 'version = "keep-me"'
+    assert_eq           "pyproject: single stamped version"    "1" "$(grep -c "^version = \"$ver\"" pyproject.toml)"
 done
 
 # Idempotency: stamp same version twice
 cp "$BANNER_PATH.orig" "$BANNER_PATH"
 cp core/config/__init__.py.orig core/config/__init__.py
 cp CITATION.cff.orig CITATION.cff
+cp pyproject.toml.orig pyproject.toml
 stamp_version "v3.1.0"
 stamp_version "v3.1.0"
 CONFIG=$(cat core/config/__init__.py)
 assert_contains "idempotent stamp (VERSION)" "$CONFIG" 'VERSION = "3.1.0"'
 assert_eq "idempotent: single VERSION line" "1" "$(grep -c '    VERSION = ' core/config/__init__.py)"
+assert_contains "idempotent stamp (pyproject)" "$(cat pyproject.toml)" 'version = "3.1.0"'
+assert_eq "idempotent: decoy still present" "1" "$(grep -c 'version = \"keep-me\"' pyproject.toml)"
 
 # Restore for archive test
 cp "$BANNER_PATH.orig" "$BANNER_PATH"
 cp core/config/__init__.py.orig core/config/__init__.py
 cp CITATION.cff.orig CITATION.cff
-rm -f "$BANNER_PATH.orig" core/config/__init__.py.orig CITATION.cff.orig
+cp pyproject.toml.orig pyproject.toml
+rm -f "$BANNER_PATH.orig" core/config/__init__.py.orig CITATION.cff.orig pyproject.toml.orig
 echo ""
 
 # ── 6. Archive exclusions ──────────────────────────────────────────────
