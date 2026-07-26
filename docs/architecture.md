@@ -1138,10 +1138,11 @@ git clone <repo-url>
 cd raptor
 
 # Install Python dependencies
-pip install -r requirements.txt
+uv sync --locked
 
 # Or install manually:
-pip install semgrep anthropic openai instructor requests beautifulsoup4
+uv tool install semgrep
+uv sync --locked --extra llm --extra web
 ```
 
 **Verify Installation**:

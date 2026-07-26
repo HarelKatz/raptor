@@ -17,7 +17,7 @@ function-definition time, which is a syntax error on 3.9 and earlier.
 
 | Tool | Required | Purpose | Install |
 |------|----------|---------|---------|
-| Semgrep | Yes | Static analysis scanning | `pip install semgrep` |
+| Semgrep | Yes | Static analysis scanning | `uv tool install semgrep` |
 | Coccinelle (spatch) | No | Semantic patch analysis | `apt install coccinelle` (>=1.3) |
 | CodeQL | No | Deep dataflow analysis | [codeql-cli-binaries](https://github.com/github/codeql-cli-binaries) |
 | AFL++ | No | Coverage-guided binary fuzzing | `apt install afl++` or `brew install afl++` |
@@ -25,7 +25,7 @@ function-definition time, which is a syntax error on 3.9 and earlier.
 | LLDB | No | Crash analysis (macOS) | Pre-installed with Xcode CLT |
 | rr | No | Deterministic record-replay debugging | `apt install rr` (Linux x86_64 only) |
 | radare2 (r2) | No | Binary disassembly, call-graph extraction | [radare2.org](https://rada.re/n/) |
-| Frida | No | Dynamic instrumentation | `pip install frida-tools` |
+| Frida | No | Dynamic instrumentation | `uv tool install frida-tools` |
 | nm, objdump, readelf | No | Binary analysis (binutils) | Pre-installed on most systems |
 | gcov | No | Code coverage (part of GCC) | Bundled with `gcc` |
 | AddressSanitizer | No | Memory error detection | Built into gcc>=4.8 and clang>=3.1 |
@@ -34,8 +34,13 @@ function-definition time, which is a syntax error on 3.9 and earlier.
 
 ## Python Packages
 
-Pinned versions are in `requirements.txt`. Install with
-`pip install -r requirements.txt`.
+Pinned versions live in `pyproject.toml`, resolved into `uv.lock`. Install with
+`uv sync --locked`.
+
+Optional capability sets are extras (`uv sync --extra web --extra smt`, and so
+on); development tooling lives in PEP 735 dependency groups and comes in by
+default via `uv sync`. `uv.lock` is the authoritative pin set — `pyproject.toml`
+records direct dependencies only, so a transitive bump shows up in the lock.
 
 **Required (core):**
 

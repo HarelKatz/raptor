@@ -21,6 +21,28 @@ if [ ! -d "$RAPTOR_DIR/core" ]; then
     exit 1
 fi
 
+# Prefer RAPTOR's uv-managed venv, softly.
+#
+# When $RAPTOR_DIR/.venv exists it is the authoritative environment, so put it
+# ahead of whatever python3 the caller's PATH would otherwise resolve. This is
+# what makes `bin/cve-diff` work on a host whose user site-packages carry a
+# mismatched typer/click pair, for example.
+#
+# Deliberately SOFT — a missing .venv is not an error and must never become
+# one:
+#   * the published operator image installs dependencies into system Python
+#     and legitimately has no .venv;
+#   * `doctor` is routed early precisely so it still runs when the environment
+#     is broken, and --version / project / frida also route past this point.
+#
+# For the same reason this does NOT auto-run `uv sync`: installing packages as
+# a side effect of launching would surprise operators, and would fail outright
+# on a read-only or offline image — turning a soft degrade into a hard stop.
+if [ -x "$RAPTOR_DIR/.venv/bin/python3" ]; then
+    PATH="$RAPTOR_DIR/.venv/bin:$PATH"
+    export PATH
+fi
+
 # Fast path: print the framework version and exit without launching a session.
 case "${1:-}" in
     --version|-V|version)

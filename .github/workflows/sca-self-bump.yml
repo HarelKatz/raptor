@@ -86,12 +86,24 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # was v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
           cache: 'pip'
 
       - name: Install RAPTOR + deps
         run: |
-          python -m pip install --upgrade pip==26.1.1
-          pip install -r requirements.txt -r requirements-dev.txt
+          set -euo pipefail
+          # Runtime + the extras/groups requirements-dev.txt used to provide.
+          # --system so downstream bare invocations keep working; see the
+          # runtime-only jobs for the full rationale.
+          uv export --frozen --no-emit-project \
+            --extra web --extra smt --group dev \
+            -o /tmp/req-dev.txt
+          uv pip install --system -r /tmp/req-dev.txt
 
       - name: Phase 1 — harden Python / Debian / npm manifests
         id: harden
@@ -110,8 +122,20 @@ jobs:
           # want the bump to cover Python (requirements.txt),
           # Debian (apt-installed in devcontainer), and npm
           # (yarn / pnpm in devcontainer).
+          # ``--target-kind application`` is REQUIRED, not cosmetic.
+          # core/inventory/library_detection.py classifies a repo carrying
+          # both a [project] table and an app entry point as ``hybrid``, and
+          # harden._supports_library_floor_raise treats a hybrid pyproject.toml
+          # as a library — emitting ``>=`` floor-raises instead of ``==`` pins
+          # on our OWN dependencies, silently weakening the "no loose deps"
+          # policy this job exists to enforce. Before pyproject.toml existed
+          # detect_target_kind('.') returned ``application``; it now returns
+          # ``hybrid``, so the flag is the only thing holding the old
+          # behaviour. harden.py hardcodes resolve_library_mode("auto", ...),
+          # so there is no config-file override.
           rm -rf /tmp/sca-harden-out
           bin/raptor-sca fix . --harden \
+            --target-kind application \
             --out /tmp/sca-harden-out \
             --git-patch \
             --self-test \
@@ -125,6 +149,18 @@ jobs:
       - name: Apply harden patch
         if: steps.harden.outputs.patch_present == 'true'
         run: git apply --verbose /tmp/sca-harden-out/upgrade.patch
+
+      # Nothing else regenerates uv.lock after harden rewrites pyproject.toml,
+      # and hygiene.check_lockfile_drift fires at severity=high on a manifest
+      # whose lockfile no longer matches — which would turn this bot's own
+      # weekly PR red for a change the bot itself made. Re-lock, then assert
+      # the result is what the manifest implies.
+      - name: Re-lock after harden
+        if: steps.harden.outputs.patch_present == 'true'
+        run: |
+          set -euo pipefail
+          uv lock
+          uv lock --check
 
       - name: Phase 2 — bump non-manifest surfaces
         id: bump
@@ -140,6 +176,11 @@ jobs:
           # it into the bump branch — otherwise pr-body.md lands as a
           # committed file in the PR and the "Detect changes" step always
           # sees a spurious change.
+          # NOTE: no ``--target-kind`` here. `bump` does not accept the flag
+          # (argparse would exit 2 and fail this job) and does not consult
+          # library-vs-application classification at all — it only rewrites
+          # Dockerfile ARG pins, a non-manifest surface where the distinction
+          # is meaningless. Only the harden pass above needs it.
           bin/raptor-sca bump . \
             --apply \
             --pr-comment \

@@ -126,3 +126,21 @@ class EvaluateFallbackTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DependencyManifestTriggerTests(unittest.TestCase):
+    """uv.lock must gate the same jobs requirements*.txt used to.
+
+    After the uv migration, uv.lock is where a transitive-dependency change
+    actually shows up — pyproject.toml only moves when a DIRECT pin changes.
+    If uv.lock stops appearing in these trigger lists, a dependency bump
+    stops triggering the scans that would vet it, and CI still reports
+    green. That is a silent-coverage loss, so pin it here.
+    """
+
+    def test_codeql_python_filter_includes_lockfile(self):
+        globs = compute_filters.FILTERS["codeql_python"]
+        self.assertIn("uv.lock", globs)
+        # The old manifests are still listed while they exist; this test is
+        # about not LOSING coverage, not about removing the old entries.
+        self.assertIn("pyproject.toml", globs)

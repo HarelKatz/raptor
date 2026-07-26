@@ -48,10 +48,31 @@ WORKDIR /opt/raptor-ci
 
 # Copy only the manifests first so the dependency layer cache survives
 # source-only changes to the repo.
-COPY requirements.txt requirements-dev.txt ./
+COPY pyproject.toml uv.lock ./
 
-RUN pip install --no-cache-dir -r requirements-dev.txt \
-    && sha256sum requirements.txt requirements-dev.txt > /etc/raptor-ci-deps.hash
+# Everything is downloaded and installed at BUILD time — uv must never
+# resolve at container run time. That is why this exports to a pinned
+# requirements file and installs with `uv pip install --system` rather than
+# using `uv sync`: sync would build a .venv (the tiers run bare `python -m
+# pytest` against system Python) and would prune anything outside the
+# manifest. --frozen asserts uv.lock is current for this pyproject.toml
+# instead of silently re-resolving during the build.
+#
+# --extra web --extra smt --group dev is exactly what requirements-dev.txt
+# used to install. Do NOT widen it: pwntools would flip
+# packages/exploit_feasibility off its readelf fallback and change which code
+# path ~699 tests exercise.
+#
+# The hash covers the two files the install is derived from, written from
+# WORKDIR so the recorded paths are relative — _tier.yml verifies it with
+# `sha256sum -c` from the checkout root, where those same relative paths
+# resolve. Keep this file list, and its order, identical to
+# ci-deps-image.yml's reqhash and to that workflow's path triggers.
+RUN uv export --frozen --no-emit-project \
+        --extra web --extra smt --group dev -o /tmp/req-dev.txt \
+    && uv pip install --system --no-cache -r /tmp/req-dev.txt \
+    && rm -f /tmp/req-dev.txt \
+    && sha256sum pyproject.toml uv.lock > /etc/raptor-ci-deps.hash
 
 # Build-time smoke import: fail the IMAGE build (not downstream CI) if a
 # pinned dependency can't import on this base.

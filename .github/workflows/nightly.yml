@@ -54,13 +54,17 @@ jobs:
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # was v8.3.2
         with:
           enable-cache: true
-          cache-dependency-glob: "requirements*.txt"
+          cache-dependency-glob: "uv.lock"
 
       - name: Create venv and install deps
         run: |
-          uv venv $VENV_PATH
-          source $VENV_PATH/bin/activate
-          uv pip install -r requirements-dev.txt
+          # --extra web --extra smt --group dev reproduces exactly what
+          # requirements-dev.txt used to install (bs4 + z3 + the test/lint/type
+          # tooling). Do NOT add other extras: pwntools alone flips
+          # exploit_feasibility off its readelf fallback and silently changes
+          # which code path ~699 tests take.
+          UV_PROJECT_ENVIRONMENT="$VENV_PATH" \
+            uv sync --locked --extra web --extra smt --group dev
 
       - name: Install binary-analysis toolchain (radare2 + LLVM 21)
         continue-on-error: true

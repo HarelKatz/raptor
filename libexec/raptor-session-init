@@ -48,10 +48,23 @@ def write_env_file():
 
     repo_root = str(REPO_ROOT)
     bin_dir = str(REPO_ROOT / "bin")
+    venv_bin = REPO_ROOT / ".venv" / "bin"
+
+    # bin/ is APPENDED (the operator's own tools win on a name clash), but the
+    # uv-managed venv is PREPENDED when it exists: it is the environment
+    # RAPTOR's dependencies actually live in, so it must beat any python3 /
+    # pytest / ruff already on PATH. Emitted only when present — the published
+    # operator image installs into system Python and has no .venv, and a PATH
+    # entry pointing at a missing directory is silently useless at best.
+    path_line = (
+        f'export PATH="{venv_bin}:$PATH:{bin_dir}"\n'
+        if venv_bin.is_dir()
+        else f'export PATH="$PATH:{bin_dir}"\n'
+    )
 
     content = (
         f'export RAPTOR_DIR="{repo_root}"\n'
-        f'export PATH="$PATH:{bin_dir}"\n'
+        + path_line
     )
 
     try:

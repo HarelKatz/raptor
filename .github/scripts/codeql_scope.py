@@ -461,10 +461,11 @@ def main() -> int:
                 if any(f in ci_triggers for f in all_changed):
                     full_reason = "CI/config file changed"
                 elif any(
-                    f.startswith("requirements") and f.endswith(".txt")
+                    (f.startswith("requirements") and f.endswith(".txt"))
+                    or f == "uv.lock"
                     for f in all_changed
                 ):
-                    full_reason = "requirements file changed"
+                    full_reason = "dependency manifest changed"
                 elif not changed_py:
                     full_reason = "no Python files in changeset"
 

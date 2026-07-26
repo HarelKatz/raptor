@@ -50,7 +50,12 @@ logger = logging.getLogger(__name__)
 # Go projects without dependency-locking are normal).
 _EXPECTED_LOCKFILES: Dict[str, Tuple[str, ...]] = {
     "npm": ("package-lock.json", "yarn.lock", "pnpm-lock.yaml", "shrinkwrap.json"),
-    "PyPI": ("Pipfile.lock", "poetry.lock"),
+    # uv.lock is a first-class Python lockfile — packages/sca/parsers/uv_lock.py
+    # already parses it (registered, is_lockfile=True). Without it here,
+    # check_lockfile_missing fires on every uv-managed project that has no
+    # Pipfile.lock / poetry.lock sibling, which after RAPTOR's own migration
+    # includes RAPTOR itself.
+    "PyPI": ("Pipfile.lock", "poetry.lock", "uv.lock"),
     "Cargo": ("Cargo.lock",),
     "Go": ("go.sum",),
     "RubyGems": ("Gemfile.lock",),

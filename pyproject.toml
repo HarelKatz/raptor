@@ -1,0 +1,199 @@
+# RAPTOR — project manifest.
+#
+# uv is the only supported dependency/environment manager. Install with
+# `uv sync`; see README.md. This file replaces requirements.txt /
+# requirements-dev.txt as the single source of pin truth.
+#
+# Exact pins per the project's "no loose deps" policy — minor / patch
+# upgrades come via dedicated PRs so any breakage is bisectable. The
+# weekly self-bump (.github/workflows/sca-self-bump.yml) rewrites the
+# pins here, so keep them machine-readable: one PEP 508 string per
+# entry, no dynamic construction.
+
+[project]
+name = "raptor"
+# Fourth version source, after core/config/__init__.py:67, CITATION.cff
+# and README.md. uv REQUIRES project.version even for a virtual project
+# (`package = false`) — it rejects the manifest outright otherwise — so
+# this cannot simply be omitted. .github/scripts/stamp-version stamps it
+# alongside the other three; without that, releases silently drift.
+version = "3.0.0"
+description = "Autonomous offensive/defensive security research framework"
+readme = "README.md"
+# 3.10 is enforced at runtime in core/startup/init.py:394 and documented
+# in README.md. Do not lower it; if a pin will not resolve at 3.10, put a
+# marker on that entry instead.
+requires-python = ">=3.10"
+
+dependencies = [
+    "requests==2.34.2",
+    # core.http.urllib_backend uses urllib3 directly for connection pooling
+    # and to avoid the no_proxy bypass that stdlib urllib.request.ProxyHandler
+    # silently performs. Already a transitive dep of `requests` but pinned
+    # here too because we depend on it directly.
+    "urllib3==2.7.0",
+    "pydantic==2.13.4",
+    "typer==0.25.1",
+    # Structured output (works with both OpenAI and Anthropic SDKs).
+    # 1.15.1+ moves ``diskcache`` from an unconditional runtime dep
+    # to the ``[diskcache]`` extra — this bump drops diskcache from
+    # raptor's install set, which is exactly what we want
+    # (CVE-2025-69872 was the trigger; raptor doesn't use the cache
+    # layer).
+    "instructor==1.15.1",
+    # Optional: For enhanced dataflow visualization (recommended)
+    "tabulate==0.10.0",
+    # Required for the /codeql workflow's pack-config trust check
+    # (core/security/codeql_trust.py inspects target-repo codeql-pack.yml /
+    # qlpack.yml / .github/codeql/codeql-config.yml). Without yaml the
+    # check degrades to fail-safe block on any pack-bearing target.
+    "pyyaml==6.0.3",
+    # Required by packages/sca/agent.py to parse target-repo pom.xml. Stdlib
+    # xml.etree.ElementTree expands internal entities (CWE-776 / billion-laughs),
+    # so the agent imports defusedxml.ElementTree when available; pinning here
+    # makes the safe parser the default on a fresh install and restricts the
+    # ImportError fallback to operator-stripped environments.
+    "defusedxml==0.7.1",
+    # Required by packages/sca for PEP 440 / PEP 508 version + specifier
+    # parsing — the engine used to match CVE-affected version ranges against
+    # resolved dependency versions. The code has an ImportError fallback to
+    # best-effort comparison, but without ``packaging`` the engine misses
+    # almost every range-bounded CVE (catch rate drops to ~0% on the
+    # compromise-detection corpus). Pin alongside the SCA hard deps.
+    "packaging==25.0",
+    # TOML reader on Python <3.11; 3.11+ has stdlib ``tomllib``.
+    # packages/sca/parsers/pyproject.py genuinely needs this at 3.10, so it
+    # is a marker-guarded runtime dep rather than an extra.
+    "tomli==2.4.1 ; python_version < '3.11'",
+]
+
+# ---------------------------------------------------------------------------
+# Extras
+#
+# CI installs exactly `web` and `smt` (plus the dev group) — that
+# combination reproduces the old requirements-dev.txt install set, which is
+# what makes the post-migration test tuple comparable to the recorded
+# baseline. Do NOT fold any other extra into those two: pwntools alone
+# flips packages/exploit_feasibility off its readelf fallback and changes
+# which code path ~699 tests exercise, a silent baseline shift.
+#
+# Everything else here is operator-facing capability, installed on demand.
+# ---------------------------------------------------------------------------
+[project.optional-dependencies]
+# = packages/web/requirements.txt
+web = [
+    "beautifulsoup4==4.15.0",
+    "playwright==1.60.0",
+]
+
+# Capped at 4.15.4.0 until the devcontainer base image moves to trixie:
+# z3-solver 4.15.5+ ships only manylinux_2_38_aarch64 wheels (glibc 2.38+),
+# but mcr.microsoft.com/devcontainers/python:1-3.12-bookworm has glibc 2.36.
+# 4.15.4.0 uses manylinux_2_34_aarch64 (glibc 2.34) and installs cleanly on
+# both x86_64 and aarch64. Move forward when bookworm -> trixie (glibc 2.41).
+# Our z3 surface (BitVec + Bool only) is unaffected by post-4.15.4 changes.
+smt = ["z3-solver==4.15.4.0"]
+
+# LLM provider SDKs.
+#   openai       — OpenAI, Gemini (via shim), Mistral, Ollama. NOTE: already
+#                  installed unconditionally as a transitive dep of
+#                  instructor; listed here so the capability is explicit.
+#   anthropic    — Anthropic Claude (native structured output)
+#   google-genai — Google Gemini (native SDK, accurate thinking token costs)
+#   botocore     — AWS Bedrock, PARENT-ONLY: imported only by the credential-
+#                  isolation dispatcher (core/llm/dispatcher) to SigV4-sign
+#                  Bedrock requests on the worker's behalf. NOT needed for
+#                  Bedrock API-key (AWS_BEARER_TOKEN_BEDROCK) auth, only for
+#                  SigV4. Workers use the stock anthropic SDK, never
+#                  boto3/botocore.
+llm = [
+    "openai==2.48.0",
+    "anthropic==0.120.0",
+    "google-genai==2.14.0",
+    "botocore==1.43.56",
+]
+
+# Rich inventory metadata (decorators, annotations, visibility, typed
+# params). ELEVEN grammars, not the five the old requirements.txt comment
+# listed — core/inventory imports tree_sitter_{c,cpp,go,java,javascript,
+# lua,php,python,ruby,rust,typescript} across 34 non-test call sites.
+inventory = [
+    "tree-sitter==0.26.0",
+    "tree-sitter-c==0.24.2",
+    "tree-sitter-cpp==0.23.4",
+    "tree-sitter-go==0.25.0",
+    "tree-sitter-java==0.23.5",
+    "tree-sitter-javascript==0.25.0",
+    "tree-sitter-lua==0.5.0",
+    "tree-sitter-php==0.24.1",
+    "tree-sitter-python==0.25.0",
+    "tree-sitter-ruby==0.23.1",
+    "tree-sitter-rust==0.24.2",
+    "tree-sitter-typescript==0.23.2",
+]
+
+# packages/exploit_feasibility/{constants,analyzer}.py import `from pwn
+# import ELF` as their PRIMARY path, falling back to readelf/objdump
+# (analyzer.py:1979) when absent. Nothing installed pwntools before, so
+# binary analysis always silently took the fallback. Deliberately NOT in
+# the CI install set — see the note above the extras block.
+exploit = ["pwntools==4.15.0"]
+
+# Small optional runtime shims, one import site each. Absence is handled
+# by a try/except at every call site.
+#   orjson  — faster JSON parse/serialise, transparent fallback to stdlib
+#   certifi — audit-able CA provenance for core/http/urllib_backend.py:147;
+#             falls back to urllib3's default trust store
+#   wcwidth — CJK/emoji-aware column widths in core/reporting/console.py:8;
+#             falls back to len(), which under-reports but never raises
+runtime = [
+    "orjson==3.11.9",
+    "certifi==2026.7.22",
+    "wcwidth==0.8.2",
+]
+
+# ---------------------------------------------------------------------------
+# Dev tooling — PEP 735 groups, not extras.
+#
+# `uv add --dev` writes here by default, so a contributor using the
+# ergonomic command lands in a table the SCA parser can see. Group names
+# map onto SCA scopes by name (packages/sca/parsers/pyproject.py
+# _scope_for_group): test/tests -> test, everything else -> dev.
+# ---------------------------------------------------------------------------
+[dependency-groups]
+lint = ["ruff==0.15.12"]
+types = ["mypy==2.1.0"]
+test = [
+    # pytest pinned exactly: the root pytest.ini uses ``--import-mode=importlib``
+    # and ``pythonpath`` (pytest 7+ features) to fix a ``tests`` namespace
+    # collision between packages that all carry ``tests/__init__.py``. Pinning
+    # avoids surprise regressions from collection-mode changes between minors.
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+    "pytest-xdist==3.8.0",
+    "pytest-split==0.11.0",
+    "gcovr==8.6",
+]
+dev = [
+    {include-group = "lint"},
+    {include-group = "types"},
+    {include-group = "test"},
+]
+
+[tool.uv]
+# Virtual project: RAPTOR is an application, not an installable library.
+# Keeping it unpackaged also keeps core/inventory/library_detection.py
+# classifying this repo as `application`, which is what makes
+# `fix --harden` emit `==` pins rather than `>=` floor-raises on our own
+# deps. See the --target-kind flag in sca-self-bump.yml.
+package = false
+
+# BOTH of these are load-bearing, not style.
+#
+# packages/sca/resolvers/pip.py:_real_python() exists to escape the
+# fake_home=True SCA sandbox by locating a system interpreter. A
+# uv-managed interpreter living under $HOME defeats that, which is a
+# product regression on every scanned target — not a CI annoyance.
+# Keep uv on the system Python and never let it download one.
+python-preference = "system"
+python-downloads = "never"

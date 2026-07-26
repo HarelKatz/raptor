@@ -52,6 +52,12 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # was v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
           cache: pip
 
       - name: Install runtime deps
@@ -59,8 +65,15 @@ jobs:
         # sweep then drives the actual scanner against each sample.
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip==26.1.1
-          pip install -r requirements.txt
+          # uv.lock is the single source of pin truth. Exported and installed
+          # with --system rather than `uv sync` so the deps land in the
+          # setup-python interpreter: every downstream `python ...`,
+          # `bin/raptor-sca ...` and `libexec/...` in this workflow keeps
+          # resolving them without a `uv run` prefix. --frozen asserts the
+          # lock is current instead of silently re-resolving.
+          uv export --frozen --no-emit-project --no-default-groups \
+            -o /tmp/req-runtime.txt
+          uv pip install --system -r /tmp/req-runtime.txt
 
       - name: Run stress sweep
         id: sweep
