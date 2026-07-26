@@ -76,6 +76,151 @@ lint = ["ruff>=0.1"]
     assert by_name["ruff"].scope == "dev"
 
 
+def test_pep735_dependency_groups(tmp_path: Path) -> None:
+    body = """\
+[dependency-groups]
+lint = ["ruff==0.15.12"]
+test = ["pytest==9.1.1", "pytest-cov>=7"]
+docs = ["sphinx~=7.0"]
+"""
+    by_name = {d.name: d for d in parse(_write(tmp_path, body))}
+    assert by_name["ruff"].scope == "dev"
+    assert by_name["ruff"].pin_style is PinStyle.EXACT
+    # ``test``/``tests`` map to the test scope, not blanket-dev — hygiene
+    # buckets cross-manifest comparisons by scope.
+    assert by_name["pytest"].scope == "test"
+    assert by_name["pytest-cov"].scope == "test"
+    assert by_name["sphinx"].scope == "dev"
+    assert by_name["sphinx"].pin_style is PinStyle.TILDE
+
+
+def test_pep735_group_name_scope_mapping(tmp_path: Path) -> None:
+    body = """\
+[dependency-groups]
+main = ["requests==2.34.2"]
+runtime = ["urllib3==2.7.0"]
+tests = ["pytest==9.1.1"]
+whatever = ["mypy==2.1.0"]
+"""
+    by_name = {d.name: d for d in parse(_write(tmp_path, body))}
+    assert by_name["requests"].scope == "main"
+    assert by_name["urllib3"].scope == "main"
+    assert by_name["pytest"].scope == "test"
+    assert by_name["mypy"].scope == "dev"
+
+
+def test_pep735_include_group_is_skipped(tmp_path: Path) -> None:
+    # ``{include-group = "..."}`` is a group reference, not a dep. It must
+    # not become a Dependency row; the referenced group is parsed on its
+    # own key.
+    body = """\
+[dependency-groups]
+lint = ["ruff==0.15.12"]
+dev = [{include-group = "lint"}, "mypy==2.1.0"]
+"""
+    deps = parse(_write(tmp_path, body))
+    names = sorted(d.name for d in deps)
+    assert names == ["mypy", "ruff"]
+
+
+def test_pep735_malformed_group_value_is_skipped(tmp_path: Path) -> None:
+    # A group whose value isn't a list (operator typo) must not abort the
+    # parse — the well-formed sibling group still yields rows.
+    body = """\
+[dependency-groups]
+broken = "ruff==0.15.12"
+lint = ["mypy==2.1.0"]
+"""
+    by_name = {d.name: d for d in parse(_write(tmp_path, body))}
+    assert "ruff" not in by_name
+    assert by_name["mypy"].scope == "dev"
+
+
+def test_tool_uv_dev_dependencies(tmp_path: Path) -> None:
+    body = """\
+[tool.uv]
+dev-dependencies = ["ruff==0.15.12", "mypy==2.1.0"]
+"""
+    by_name = {d.name: d for d in parse(_write(tmp_path, body))}
+    assert by_name["ruff"].scope == "dev"
+    assert by_name["mypy"].scope == "dev"
+
+
+def test_tool_uv_resolver_steering_tables_are_not_deps(tmp_path: Path) -> None:
+    # constraint-/override-dependencies steer resolution; nothing installs
+    # them. Emitting them would inflate the dep surface with phantom rows.
+    body = """\
+[tool.uv]
+dev-dependencies = ["ruff==0.15.12"]
+constraint-dependencies = ["urllib3<3"]
+override-dependencies = ["werkzeug==2.3.0"]
+"""
+    names = sorted(d.name for d in parse(_write(tmp_path, body)))
+    assert names == ["ruff"]
+
+
+def test_raptor_own_manifest_shape(tmp_path: Path) -> None:
+    """Lock the shape of RAPTOR's own pyproject.toml.
+
+    RAPTOR scans itself weekly (.github/workflows/sca-self-bump.yml). If
+    this parser stops seeing any of these tables, the self-scan goes blind
+    on that surface and the bump silently stops proposing fixes for it —
+    a failure that exits 0. Keep this test in lockstep with the real
+    manifest.
+    """
+    body = """\
+[project]
+name = "raptor"
+requires-python = ">=3.10"
+dependencies = [
+    "requests==2.34.2",
+    "tomli==2.3.0 ; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+web = ["beautifulsoup4==4.15.0"]
+smt = ["z3-solver==4.15.4.0"]
+
+[dependency-groups]
+lint = ["ruff==0.15.12"]
+types = ["mypy==2.1.0"]
+test = ["pytest==9.1.1"]
+dev = [
+    {include-group = "lint"},
+    {include-group = "types"},
+    {include-group = "test"},
+]
+
+[tool.uv]
+package = false
+"""
+    deps = parse(_write(tmp_path, body))
+    by_name = {d.name: d for d in deps}
+
+    # Runtime pins stay `main` + EXACT — the "no loose deps" policy is
+    # what harden re-asserts on every weekly bump.
+    assert by_name["requests"].scope == "main"
+    assert by_name["requests"].pin_style is PinStyle.EXACT
+    # Marker-guarded runtime dep is still a main-scope exact pin.
+    assert by_name["tomli"].scope == "main"
+    assert by_name["tomli"].pin_style is PinStyle.EXACT
+
+    # Extras land in `optional`, groups in dev/test.
+    assert by_name["beautifulsoup4"].scope == "optional"
+    assert by_name["z3-solver"].scope == "optional"
+    assert by_name["ruff"].scope == "dev"
+    assert by_name["mypy"].scope == "dev"
+    assert by_name["pytest"].scope == "test"
+
+    # Every declared dep is visible, and the include-group refs and
+    # `[tool.uv]` config keys produced no phantom rows.
+    assert sorted(by_name) == [
+        "beautifulsoup4", "mypy", "pytest", "requests", "ruff",
+        "tomli", "z3-solver",
+    ]
+    assert all(d.pin_style is PinStyle.EXACT for d in deps)
+
+
 def test_build_system_requires(tmp_path: Path) -> None:
     body = """\
 [build-system]
