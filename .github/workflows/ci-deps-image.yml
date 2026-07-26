@@ -20,6 +20,12 @@ on:
     paths:
       - 'requirements.txt'
       - 'requirements-dev.txt'
+      # Added ahead of the uv migration and kept ALONGSIDE the requirements
+      # entries rather than replacing them: the commit that introduces the
+      # manifest and the later commit that deletes requirements*.txt must
+      # both trigger a rebuild.
+      - 'pyproject.toml'
+      - 'uv.lock'
       - '.github/docker/ci-deps.Dockerfile'
       - '.github/workflows/ci-deps-image.yml'
   workflow_dispatch:

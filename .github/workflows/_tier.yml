@@ -51,6 +51,17 @@ on:
         description: true → run in the prebuilt image; false → venv on the runner.
         required: true
         type: boolean
+      image_owner:
+        description: >-
+          GHCR namespace for the deps image, already lowercased by the
+          caller. Required because GHCR paths must be lowercase while
+          github.repository_owner preserves the owner's real case, and
+          GitHub expressions have no toLower() — so a mixed-case owner
+          (any fork) otherwise fails every container tier with
+          "invalid reference format". Caller computes it once; see
+          tests.yml's pre_check.outputs.owner.
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -63,7 +74,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout_minutes }}
     container:
-      image: ghcr.io/${{ github.repository_owner }}/raptor-ci-deps:main
+      image: ghcr.io/${{ inputs.image_owner }}/raptor-ci-deps:main
       credentials:
         username: ${{ github.actor }}
         # github.token is always available inside a called workflow — no
@@ -77,15 +88,24 @@ jobs:
           persist-credentials: false
       - name: Reconcile deps
         # Skip if the image's baked requirements match the checkout.
-        # pip must resolve every package to verify satisfaction (~10-15s);
-        # the hash check short-circuits that on the common path.
+        # The installer must resolve every package to verify satisfaction
+        # (~10-15s); the hash check short-circuits that on the common path.
+        #
+        # The reconcile branch is uv-based so it stays correct once the uv
+        # migration deletes requirements*.txt: `sha256sum -c` will fail (the
+        # files are gone) and fall through to here, which must then be able
+        # to install from the new manifest. `command -v uv` guards the window
+        # where this workflow runs against an image built before uv was baked
+        # in — ci-deps-image.yml only rebuilds :main on push to main, so a PR
+        # that changes both still runs the OLD image.
         run: |
           if [ -f /etc/raptor-ci-deps.hash ] && \
              sha256sum -c /etc/raptor-ci-deps.hash --status; then
             echo "Image deps match checkout — skipping reconcile"
           else
-            echo "Hash mismatch or missing — running pip install"
-            pip install --no-cache-dir -r requirements-dev.txt
+            echo "Hash mismatch or missing — reconciling with uv"
+            command -v uv >/dev/null 2>&1 || python -m pip install uv==0.11.32
+            uv pip install --system --no-cache -r requirements-dev.txt
           fi
       - name: Run tests
         env:
