@@ -31,6 +31,15 @@ if [ ! -f "$RAPTOR_DIR/libexec/raptor-sca-run" ]; then
     exit 1
 fi
 
+# Prefer RAPTOR's uv-managed venv, softly. See bin/raptor for the full
+# rationale: absence is never an error (the published operator image installs
+# into system Python and has no .venv), and this deliberately does not
+# auto-run `uv sync`, which would fail on a read-only or offline image.
+if [ -x "$RAPTOR_DIR/.venv/bin/python3" ]; then
+    PATH="$RAPTOR_DIR/.venv/bin:$PATH"
+    export PATH
+fi
+
 # Strip env vars that could inject code into the Python process.
 # Covers loader hijack (LD_*, DYLD_*), Python interpreter hooks
 # (PYTHON*), and TLS/SSL behaviour overrides.

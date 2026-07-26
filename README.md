@@ -53,7 +53,8 @@ RAPTOR stands for Recursive Autonomous Penetration Testing and Observation Robot
 
 - **Claude Code** with an active subscription (Max, Pro, Team, or Enterprise) or an Anthropic API key. This is the orchestration layer -- RAPTOR runs inside a Claude Code session.
 - **Python 3.10+** and **Node.js 18+**.
-- **Semgrep** (`pip install semgrep`) for static analysis. CodeQL is optional but recommended.
+- **[uv](https://github.com/astral-sh/uv)** — RAPTOR's dependency and environment manager.
+- **Semgrep** (`uv tool install semgrep`) for static analysis. CodeQL is optional but recommended.
 
 For the analysis dispatch layer (the LLM that analyses individual findings), Claude Code itself handles everything by default -- no extra API keys needed. If you want multi-model analysis (e.g. Claude + GPT + Gemini), you will need API keys for each provider. See [Using a different LLM](#using-a-different-llm) below.
 
@@ -62,22 +63,40 @@ For the analysis dispatch layer (the LLM that analyses individual findings), Cla
 ### Option 1: Install manually
 
 ```bash
+# Install uv, if you don't have it. Either the official installer:
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# ...or download a signed release binary instead, if you would rather not
+# pipe a script into a shell:
+#   https://github.com/astral-sh/uv/releases
+
 # Clone the repo
 git clone https://github.com/gadievron/raptor.git
 cd raptor
 
-# Install Python dependencies
-pip install -r requirements.txt
+# Create the environment and install pinned dependencies from uv.lock.
+# --locked fails rather than silently re-resolving if the lock is stale.
+uv sync --locked
 
 # Install Claude Code (if you don't already have it)
 npm install -g @anthropic-ai/claude-code
 
 # Install Semgrep (required for scanning)
-pip install semgrep
+uv tool install semgrep
 
 # Launch RAPTOR
 claude
 ```
+
+Optional capability sets are extras — add them to `uv sync`:
+
+| Extra | Adds |
+|---|---|
+| `--extra web` | `/web` scanning (BeautifulSoup, Playwright) |
+| `--extra smt` | Z3 constraint solving |
+| `--extra llm` | OpenAI / Anthropic / Gemini / Bedrock SDKs |
+| `--extra inventory` | tree-sitter grammars for rich inventory metadata |
+| `--extra exploit` | pwntools, for binary-analysis ELF parsing |
+| `--extra runtime` | orjson / certifi / wcwidth shims |
 
 If you add `bin/` to your PATH (or symlink `bin/raptor` somewhere on PATH), you can run `raptor` from any directory -- the launcher resolves the RAPTOR installation and sets up the working directory automatically.
 
@@ -252,7 +271,7 @@ Useful subcommands include `fix`, `check`, `upgrade`, `diff`, `verify`, `health`
 
 ## Z3 SMT integration
 
-RAPTOR has a two-layer Z3 integration (`pip install z3-solver`). It is optional. Everything works without it, but the results are better with it.
+RAPTOR has a two-layer Z3 integration (`uv sync --extra smt`). It is optional. Everything works without it, but the results are better with it.
 
 **Dataflow pre-screening (CodeQL)**
 
@@ -262,13 +281,13 @@ When CodeQL produces a path result, the path constraints are checked for satisfi
 
 During binary exploit feasibility assessment, Z3 checks whether a one-gadget's register and memory constraints are satisfiable against the concrete crash state. Gadgets are ranked by actual reachability rather than heuristics, so you spend time on gadgets that can actually work.
 
-Z3 is pre-installed in the devcontainer. For manual installs: `pip install z3-solver`.
+Z3 is pre-installed in the devcontainer. For manual installs: `uv sync --extra smt`.
 
 ---
 
 ## orjson (optional)
 
-When `orjson` is installed (`pip install orjson`), RAPTOR uses it for all JSON parsing and serialisation. The speedup matters on large inventories and finding sets. Without it, everything works identically via stdlib `json` — the switch is transparent.
+When `orjson` is installed (`uv sync --extra runtime`), RAPTOR uses it for all JSON parsing and serialisation. The speedup matters on large inventories and finding sets. Without it, everything works identically via stdlib `json` — the switch is transparent.
 
 ---
 

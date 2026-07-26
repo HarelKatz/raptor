@@ -148,6 +148,15 @@ def run_sca_subprocess(
     log_dir = RaptorConfig.LOG_DIR
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    # The child is spawned with sys.executable. Under the uv migration that is
+    # normally $RAPTOR_DIR/.venv/bin/python3, which lives outside the mount-ns
+    # baseline (/usr, /lib, /lib64) and outside Landlock's read allowlist — so
+    # without these paths the sandboxed child cannot read its own interpreter
+    # or site-packages. python_runtime_tool_paths() covers prefix,
+    # base_prefix, exec_prefix and the executable, which is what makes a venv
+    # (and pyenv / conda / Homebrew) work here.
+    from core.sandbox.python_paths import python_runtime_tool_paths
+
     try:
         result = sandbox_run(
             cmd,
@@ -157,6 +166,7 @@ def run_sca_subprocess(
             target=str(target),
             output=str(output_dir),
             writable_paths=[str(log_dir)],
+            tool_paths=python_runtime_tool_paths(),
             env=env if env is not None else RaptorConfig.get_safe_env(),
             env_caller_filtered=True,
             capture_output=True,
