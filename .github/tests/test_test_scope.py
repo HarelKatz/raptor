@@ -270,3 +270,29 @@ class TestOnRealRepo:
         sca_files = result["sca"]["files"]
         assert len(sca_files) > 0
         assert all(is_test_file(f) for f in sca_files)
+
+
+class TestDependencyManifestTriggersFastTier:
+    """A dependency-only change must still run the fast tier.
+
+    The infra predicate exists so a dependency bump runs the tests even when
+    no .py file moved. After the uv migration uv.lock is the file that
+    changes on a TRANSITIVE bump — pyproject.toml only moves when a direct
+    pin does — so omitting it would let dependency updates land untested
+    while CI reported green.
+    """
+
+    def test_lockfile_only_change_runs_fast_tier(self):
+        result = compute_tier_dispatch(["uv.lock"], Path(__file__).resolve().parents[2])
+        assert result["python"]["run"] is True
+        assert result["python"]["files"], "expected the fast tier to be populated"
+
+    def test_manifest_only_change_runs_fast_tier(self):
+        result = compute_tier_dispatch(["pyproject.toml"], Path(__file__).resolve().parents[2])
+        assert result["python"]["run"] is True
+
+    def test_unrelated_non_python_change_does_not_run_fast_tier(self):
+        # Guards against the predicate being widened into "any non-.py file",
+        # which would make the trigger meaningless.
+        result = compute_tier_dispatch(["README.md"], Path(__file__).resolve().parents[2])
+        assert result["python"]["run"] is False

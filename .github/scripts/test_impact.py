@@ -503,7 +503,7 @@ def main() -> int:
 
     # Non-Python infrastructure changes trigger the full fast tier.
     infra_triggered = any(
-        f.startswith("requirements") or f == "pyproject.toml"
+        f.startswith("requirements") or f in ("pyproject.toml", "uv.lock")
         for f in changed_non_py
     )
 

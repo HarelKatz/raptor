@@ -61,12 +61,26 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990  # was v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
       - name: Install minimal deps
         # Pure-Python refit — no numpy / sklearn. Just whatever
         # the SCA package itself needs to import (urllib3 etc.).
         run: |
-          python -m pip install --upgrade pip==26.1.2
-          pip install 'urllib3==2.7.0,<3.0'
+          set -euo pipefail
+          # uv.lock is the single source of pin truth. Exported and installed
+          # with --system rather than `uv sync` so the deps land in the
+          # setup-python interpreter: every downstream `python ...`,
+          # `bin/raptor-sca ...` and `libexec/...` in this workflow keeps
+          # resolving them without a `uv run` prefix. --frozen asserts the
+          # lock is current instead of silently re-resolving.
+          uv export --frozen --no-emit-project --no-default-groups \
+            -o /tmp/req-runtime.txt
+          uv pip install --system -r /tmp/req-runtime.txt
 
       - name: Validate corpus
         # Re-run validation to get the latest verdict. If it's
