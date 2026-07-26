@@ -394,7 +394,7 @@ def _detect_ecosystem_from_filename(name: str) -> Optional[str]:
         return "npm"
     if name.startswith("requirements") and name.endswith(".txt"):
         return "PyPI"
-    if name == "pyproject.toml" or name == "Pipfile" or name == "poetry.lock":
+    if name in ("pyproject.toml", "Pipfile", "poetry.lock", "uv.lock"):
         return "PyPI"
     if name == "go.mod" or name == "go.sum":
         return "Go"

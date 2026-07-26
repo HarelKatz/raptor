@@ -110,8 +110,20 @@ jobs:
           # want the bump to cover Python (requirements.txt),
           # Debian (apt-installed in devcontainer), and npm
           # (yarn / pnpm in devcontainer).
+          # ``--target-kind application`` is REQUIRED, not cosmetic.
+          # core/inventory/library_detection.py classifies a repo carrying
+          # both a [project] table and an app entry point as ``hybrid``, and
+          # harden._supports_library_floor_raise treats a hybrid pyproject.toml
+          # as a library — emitting ``>=`` floor-raises instead of ``==`` pins
+          # on our OWN dependencies, silently weakening the "no loose deps"
+          # policy this job exists to enforce. Before pyproject.toml existed
+          # detect_target_kind('.') returned ``application``; it now returns
+          # ``hybrid``, so the flag is the only thing holding the old
+          # behaviour. harden.py hardcodes resolve_library_mode("auto", ...),
+          # so there is no config-file override.
           rm -rf /tmp/sca-harden-out
           bin/raptor-sca fix . --harden \
+            --target-kind application \
             --out /tmp/sca-harden-out \
             --git-patch \
             --self-test \
@@ -125,6 +137,18 @@ jobs:
       - name: Apply harden patch
         if: steps.harden.outputs.patch_present == 'true'
         run: git apply --verbose /tmp/sca-harden-out/upgrade.patch
+
+      # Nothing else regenerates uv.lock after harden rewrites pyproject.toml,
+      # and hygiene.check_lockfile_drift fires at severity=high on a manifest
+      # whose lockfile no longer matches — which would turn this bot's own
+      # weekly PR red for a change the bot itself made. Re-lock, then assert
+      # the result is what the manifest implies.
+      - name: Re-lock after harden
+        if: steps.harden.outputs.patch_present == 'true'
+        run: |
+          set -euo pipefail
+          uv lock
+          uv lock --check
 
       - name: Phase 2 — bump non-manifest surfaces
         id: bump
@@ -140,6 +164,11 @@ jobs:
           # it into the bump branch — otherwise pr-body.md lands as a
           # committed file in the PR and the "Detect changes" step always
           # sees a spurious change.
+          # NOTE: no ``--target-kind`` here. `bump` does not accept the flag
+          # (argparse would exit 2 and fail this job) and does not consult
+          # library-vs-application classification at all — it only rewrites
+          # Dockerfile ARG pins, a non-manifest surface where the distinction
+          # is meaningless. Only the harden pass above needs it.
           bin/raptor-sca bump . \
             --apply \
             --pr-comment \

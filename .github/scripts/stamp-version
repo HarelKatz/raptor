@@ -66,6 +66,47 @@ def stamp_citation(ver: str) -> str:
     return match.group(0) if match else ""
 
 
+def stamp_pyproject(ver: str) -> str:
+    """Stamp ``[project].version`` in pyproject.toml.
+
+    uv requires ``project.version`` even for a virtual project
+    (``package = false``) — it refuses to read the manifest without it — so
+    pyproject.toml is unavoidably a fourth version source alongside
+    core/config/__init__.py, CITATION.cff and README.md. Without stamping it
+    here, a release would ship a manifest still claiming the previous
+    version, and nothing would fail.
+
+    Anchored to the ``[project]`` table so a ``version = "..."`` line under
+    some other table (a future ``[tool.*]`` section) cannot be hit instead.
+    """
+    path = Path("pyproject.toml")
+    if not path.exists():
+        return ""
+    text = path.read_text()
+
+    def replace_in_project(m: re.Match) -> str:
+        head, body = m.group(1), m.group(2)
+        body_new, hits = re.subn(
+            r'^(version = ")[^"]+(")',
+            lambda v: v.group(1) + ver + v.group(2),
+            body, count=1, flags=re.MULTILINE,
+        )
+        return head + (body_new if hits else body)
+
+    # [project] table body = everything up to the next top-level [table]
+    text, n = re.subn(
+        r'(?ms)^(\[project\]\n)((?:(?!^\[).*\n)*)',
+        replace_in_project,
+        text, count=1,
+    )
+    if n == 0 or f'version = "{ver}"' not in text:
+        print("warning: [project].version pattern not found in pyproject.toml",
+              file=sys.stderr)
+        return ""
+    atomic_write(path, text)
+    return f'pyproject.toml: version = "{ver}"'
+
+
 def stamp_readme(tag: str) -> str:
     path = Path("README.md")
     text = path.read_text()
@@ -111,6 +152,10 @@ def main() -> None:
         print(f"  {result}")
         stamped += 1
     result = stamp_citation(ver)
+    if result:
+        print(f"  {result}")
+        stamped += 1
+    result = stamp_pyproject(ver)
     if result:
         print(f"  {result}")
         stamped += 1
