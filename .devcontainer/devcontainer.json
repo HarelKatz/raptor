@@ -35,7 +35,7 @@
     "source=${localWorkspaceFolder}/.env,target=/workspaces/raptor/.env,type=bind,consistency=cached",
     "source=${localEnv:HOME}/.claude,target=/root/.claude,type=bind,consistency=cached"
   ],
-  "postCreateCommand": "uv export --frozen --no-emit-project --extra web --extra smt --extra llm --group dev -o /tmp/req-postcreate.txt && uv pip install --system -r /tmp/req-postcreate.txt && rm -f /tmp/req-postcreate.txt",
+  "postCreateCommand": "uv export --frozen --no-emit-project --extra web --extra smt --extra llm --group dev -o /tmp/req-postcreate.txt && sudo -E env \"PATH=$PATH\" uv pip install --system -r /tmp/req-postcreate.txt && rm -f /tmp/req-postcreate.txt",
   "postStartCommand": "sudo sh -c 'echo 1 > /proc/sys/kernel/perf_event_paranoid 2>/dev/null || true'",
   "remoteUser": "vscode"
 }
